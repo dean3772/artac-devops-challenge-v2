@@ -281,3 +281,109 @@ I updated the FastAPI dependency in requirements.txt so the dependency resolver 
 Why:
 Application dependencies are part of the production runtime surface. A known HIGH vulnerability in a web framework dependency should not be ignored when a fixed version is available and the upgrade is compatible with the application. This also validates the decision to scan for HIGH and CRITICAL vulnerabilities instead of only CRITICAL.
 
+Finding 17: SSH access is open to the internet
+
+What I found:
+The Terraform security group allows inbound SSH access on port 22 from 0.0.0.0/0. This means any public IP address can attempt to connect to the EC2 instance over SSH.
+
+Classification:
+Needs Improvement.
+
+Contractor's reasoning:
+DECISIONS.md mentions that SSH was opened to 0.0.0.0/0 for initial setup and for the CI pipeline to deploy via SSH. I understand this as a temporary setup decision, but I would not keep it as a production-ready security group rule.
+
+Action taken:
+I kept the current SSH rule for this assignment because it matches the inherited simple EC2 deployment model and actual cloud deployment is optional. I documented it as a production hardening item. In production, I would restrict SSH to a trusted CIDR, use a VPN or bastion, or preferably use AWS Systems Manager Session Manager instead of direct inbound SSH.
+
+Why:
+Open SSH increases the attack surface of the instance. Even with key-based authentication, production infrastructure should avoid exposing SSH to the entire internet unless there is a temporary and clearly controlled reason.
+
+Finding 18: Application port is exposed directly to the internet
+
+What I found:
+The Terraform security group allows inbound access to the application port from 0.0.0.0/0. This makes the API directly reachable on the EC2 public IP and app port.
+
+Classification:
+Intentional Trade-off.
+
+Contractor's reasoning:
+DECISIONS.md does not explicitly discuss the application port exposure, but the Terraform outputs expose an app URL using the EC2 public IP and application port, so the setup appears designed as a simple direct-access deployment.
+
+Action taken:
+I kept the direct app port exposure for the assignment because it keeps the deployment simple and avoids requiring paid infrastructure. For production, I would put the service behind an Application Load Balancer, terminate TLS, attach a proper domain name, and restrict the instance security group so only the load balancer can reach the application port.
+
+Why:
+Direct EC2 exposure is acceptable for a simple demo or free-tier validation, but it is not the preferred production pattern. A load balancer gives better security boundaries, health checks, TLS support, and future scaling options.
+
+Finding 19: AMI is pinned directly in the EC2 resource
+
+What I found:
+The Terraform configuration hardcodes a specific AMI ID directly in the aws_instance resource. This improves reproducibility, but it also ties the configuration to a specific region and can become stale over time.
+
+Classification:
+Intentional Trade-off.
+
+Contractor's reasoning:
+DECISIONS.md explains that the AMI was pinned because a dynamic latest Ubuntu lookup previously broke the Docker installation script. I agree with the goal of reproducibility, especially for an assignment or a simple single-instance deployment.
+
+Action taken:
+I kept the pinned AMI approach for now. For production, I would either expose the AMI as an explicit ami_id variable with clear region-specific documentation, or use a controlled AMI selection process such as a tested golden image or a carefully filtered data source. I would avoid blindly tracking latest.
+
+Why:
+Pinning prevents unexpected infrastructure changes, but hardcoding AMI IDs directly inside the resource makes updates and region changes harder. The production goal should be controlled updates, not automatic latest and not permanently stale infrastructure.
+
+Finding 20: Terraform uses local state
+
+What I found:
+The Terraform configuration currently uses local state. There is no remote backend configured for shared state storage or locking.
+
+Classification:
+Intentional Trade-off.
+
+Contractor's reasoning:
+DECISIONS.md mentions that local state was chosen because this is a single-operator deployment, and S3 plus DynamoDB locking was considered overkill at this stage. I agree that local state is acceptable for a small assignment or one-person validation workflow.
+
+Action taken:
+I kept local state for this assignment. I did not configure an S3 backend because actual AWS deployment is optional and I do not want to require cloud resources just to review or validate the repository. For a real production/team deployment, I would use an S3 backend with DynamoDB locking, encryption, and restricted IAM access.
+
+Why:
+Remote state and locking are important when more than one person or automation process can run Terraform. They prevent state loss, state drift, and concurrent apply conflicts. Local state is fine for isolated local validation, but not for production teamwork.
+
+Finding 21: EC2 bootstrap script is not idempotent and does not verify application readiness
+
+What I found:
+The user-data script pulls the Docker image and runs a container named sentiment-api. However, it does not remove an existing container with the same name before running docker run. If the bootstrap or deployment logic is executed again, Docker will fail because a container named sentiment-api already exists. The script also starts the container but does not verify that the application actually becomes ready.
+
+Classification:
+Bug.
+
+Contractor's reasoning:
+DECISIONS.md does not mention this behavior. The script appears to be written for first EC2 boot only, where the container name conflict would not happen.
+
+Action taken:
+I updated user-data.sh to remove any existing sentiment-api container before starting a new one. I also added a readiness loop that checks the /ready endpoint after container startup and writes useful logs if the service does not become ready.
+
+Why:
+Deployment and bootstrap scripts should be safe to rerun. A script that fails because an old container exists can break redeployments and make recovery harder. Verifying /ready after startup also catches cases where Docker starts successfully but the application cannot serve traffic.
+
+Additional note: Terraform plan validation evidence
+
+Purpose:
+The assignment asks for Terraform validation and a plan output, while actual AWS deployment is optional.
+
+What I did:
+I generated terraform/plan-output.txt without applying any real AWS infrastructure. Because real AWS credentials were not available in this local environment, I temporarily used dummy AWS provider credentials together with provider skip-validation settings only for generating the local plan.
+
+Important:
+This temporary provider configuration was not kept in the final Terraform code. After generating the plan output, I reverted the provider block back to the normal AWS provider configuration.
+
+Result:
+terraform plan successfully generated a plan showing:
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+
+The generated plan output is included as terraform/plan-output.txt. The binary tfplan file was treated as a local generated artifact and was not committed.
+
+Why:
+This keeps the submitted Terraform code clean for real AWS usage while still providing a reproducible plan artifact for the assignment review.
+
