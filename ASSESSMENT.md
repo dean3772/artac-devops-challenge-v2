@@ -157,3 +157,106 @@ I added PYTHONUNBUFFERED=1 and PYTHONDONTWRITEBYTECODE=1 to the Dockerfile.
 Why:
 PYTHONUNBUFFERED=1 ensures logs are written immediately, which is useful for Docker logs and production observability. PYTHONDONTWRITEBYTECODE=1 prevents Python from writing .pyc files at runtime, keeping the container filesystem cleaner.
 
+Finding 10: Pipeline can publish the Docker image before tests and security validation pass
+
+What I found:
+The inherited pipeline starts with a Docker image build job. On push to main, this job can also push the image to GitHub Container Registry before the test and security scan jobs complete. The test and security scan jobs depend on the build job, which means validation happens after the image has already been built and potentially published.
+
+Classification:
+Bug.
+
+Contractor's reasoning:
+DECISIONS.md mentions that the pipeline was split into separate jobs for build, test, security scan, and deploy. I agree with the idea of separating pipeline responsibilities, but I disagree with the current validation order. A production pipeline should not publish an image before the required quality gates pass.
+
+Action taken:
+I changed the pipeline so unit tests run first. The Docker image is built only after tests pass, and it is pushed to the registry only after the image passes smoke testing and vulnerability scanning.
+
+Why:
+CI/CD should prevent bad artifacts from being published. The registry should contain artifacts that passed the expected quality gates. Publishing before validation creates a risk where a broken or vulnerable image is available even if the pipeline later fails.
+
+Finding 11: Pipeline job structure does not match the Docker artifact lifecycle
+
+What I found:
+The inherited pipeline splits build, test, security scan, and deploy into separate jobs. Separate jobs are useful when work can run in parallel, needs different runners, permissions, environments, or approval gates. However, in this pipeline the Docker image is a single artifact that should move through a sequential lifecycle: build, run, smoke test, scan, and then push. Splitting this lifecycle incorrectly caused the image to be pushed too early and forced the security scan to rebuild a separate image.
+
+Classification:
+Needs Improvement.
+
+Contractor's reasoning:
+DECISIONS.md mentions that the pipeline was split into separate jobs for build, test, security scan, and deploy. I agree with separating jobs by purpose, but I disagree with the way the Docker image lifecycle was split. The split looked organized, but it did not preserve artifact consistency.
+
+Action taken:
+I kept a separate test job because it has a clear purpose: fast Python validation without Docker. I moved the Docker image lifecycle into a single image job with sequential steps: build the image, run the container, smoke test the endpoints, run the vulnerability scan, and push only after validation passes. Another valid production approach would be to keep more separate jobs and pass the built image between them using workflow artifacts, but for this small service the single image job is simpler, avoids duplicate builds, and keeps the same local image available across all image validation steps.
+
+Why:
+Jobs should represent meaningful boundaries. For this repository, testing Python code and validating the Docker image are different purposes, so two jobs make sense. But the Docker build, smoke test, scan, and push operate on the same image artifact, so keeping them as sequential steps in the same job gives clearer artifact flow, simpler logs, and less unnecessary CI complexity.
+
+Finding 12: Pipeline does not smoke test the built Docker image before publishing
+
+What I found:
+The inherited pipeline builds a Docker image but does not run the resulting container and verify the API endpoints before publishing. Unit tests are useful, but they do not prove that the Docker image itself works with the final runtime filesystem, installed native libraries, non-root user, exposed port, healthcheck, and CMD.
+
+Classification:
+Needs Improvement.
+
+Contractor's reasoning:
+DECISIONS.md mentions that /health was used for the CI smoke test, but the current pipeline does not actually run the built container and test the service endpoints before publishing.
+
+Action taken:
+I added a Docker smoke test after the image build. The pipeline starts the built container and validates /health, /ready, and /predict before the image is published.
+
+Why:
+The Docker image is the production artifact. Since this application depends on a serialized ML model and native scikit-learn dependencies, it is important to validate the final container, not only the Python code. This catches issues such as missing shared libraries, wrong COPY instructions, broken healthchecks, wrong ports, and model loading failures.
+
+Finding 13: Security scan rebuilds a separate image instead of scanning the validated image
+
+What I found:
+The inherited security scan job builds a separate image tagged for scanning. This means the scan does not necessarily run against the exact same image that was built and potentially published. It also duplicates Docker build work.
+
+Classification:
+Needs Improvement.
+
+Contractor's reasoning:
+DECISIONS.md mentions that a Trivy scan was added, but does not mention artifact consistency between build, scan, and publish steps.
+
+Action taken:
+I changed the pipeline so the image is built once and loaded into the local Docker daemon. The same image is then smoke-tested, scanned by Trivy, tagged for GitHub Container Registry, and pushed only after validation succeeds.
+
+Why:
+A CI pipeline should avoid testing or scanning one artifact while publishing another. Using the same image for smoke testing, vulnerability scanning, and publishing improves confidence and avoids unnecessary duplicate builds.
+
+Finding 14: Trivy severity policy only fails on CRITICAL vulnerabilities
+
+What I found:
+The inherited Trivy configuration only fails the pipeline on CRITICAL vulnerabilities. This makes the pipeline easier to pass, but it may allow HIGH severity vulnerabilities to pass without review.
+
+Classification:
+Intentional Trade-off.
+
+Contractor's reasoning:
+DECISIONS.md mentions that the Trivy configuration was relaxed because vulnerability findings in the base image were blocking the pipeline. I agree that ignore-unfixed can be reasonable, because failing on vulnerabilities with no available fix can create noise. However, I would not keep CRITICAL-only enforcement as the final production policy without review.
+
+Action taken:
+I made the scan stricter by checking both HIGH and CRITICAL vulnerabilities while keeping ignore-unfixed enabled. If this becomes too noisy in a real production environment, I would add a documented ignore policy for accepted findings instead of silently allowing important vulnerabilities.
+
+Why:
+Security scanning should be useful rather than noisy. A pipeline that fails on every unactionable vulnerability creates alert fatigue, but a pipeline that only gates CRITICAL issues may miss meaningful production risk. A better production approach is to scan for HIGH and CRITICAL vulnerabilities, keep exceptions documented, and review the vulnerability policy regularly.
+
+Finding 15: Deploy job is currently a placeholder and does not perform real deployment
+
+What I found:
+The deploy job currently only echoes TODO messages and does not deploy the image anywhere. This means the pipeline is not fully end-to-end yet from source code to a running service.
+
+Classification:
+Needs Improvement.
+
+Contractor's reasoning:
+DECISIONS.md mentions that the deploy job is stubbed out and still needs to be wired to the actual infrastructure. I agree that this is acceptable during early setup, especially because the assignment does not require spending money or performing an actual AWS deployment. However, it should not be treated as a production-ready deployment step.
+
+Action taken:
+I kept the deploy job as a known placeholder for now and focused this CI/CD pass on the validation flow: run tests, build the Docker image, smoke test the container, scan the image, and push only after validation passes. I will revisit the deploy step after validating the Terraform configuration, because a real deployment flow depends on the final infrastructure design.
+
+Why:
+The deploy step should be connected to the actual deployment target, credentials, and infrastructure workflow. Keeping it visible as a placeholder is useful while working through the assignment, but it should be clearly documented as incomplete and not presented as a real production deployment.
+
+
