@@ -260,4 +260,24 @@ Why:
 The deploy step should be connected to the actual deployment target, credentials, and infrastructure workflow. Keeping it visible as a placeholder is useful while working through the assignment, but it should be clearly documented as incomplete and not presented as a real production deployment.
 
 
-test1
+Finding 16: Runtime dependency version introduced a HIGH vulnerability in Starlette
+
+What I found:
+After making the Trivy scan stricter by checking both HIGH and CRITICAL vulnerabilities, the GitHub Actions pipeline failed during the image security scan. Trivy reported a HIGH vulnerability in Starlette 0.46.2:
+
+CVE-2025-62727 - Starlette DoS via Range header merging
+
+Starlette is pulled indirectly through FastAPI, which is pinned in requirements.txt. The scan showed that a fixed version is available, so this was not only a theoretical warning.
+
+Classification:
+Bug.
+
+Contractor's reasoning:
+DECISIONS.md does not mention this specific dependency vulnerability. The contractor did mention relaxing Trivy to only fail on CRITICAL vulnerabilities because scans were blocking the pipeline. I understand that choice as a temporary trade-off, but in this case the stricter scan found a real HIGH vulnerability with an available fix.
+
+Action taken:
+I updated the FastAPI dependency in requirements.txt so the dependency resolver installs a fixed Starlette version. After the change, I recreated the local Python environment, installed requirements-dev.txt, and ran the test suite successfully. I also rebuilt and smoke-tested the Docker image locally before pushing the fix.
+
+Why:
+Application dependencies are part of the production runtime surface. A known HIGH vulnerability in a web framework dependency should not be ignored when a fixed version is available and the upgrade is compatible with the application. This also validates the decision to scan for HIGH and CRITICAL vulnerabilities instead of only CRITICAL.
+
