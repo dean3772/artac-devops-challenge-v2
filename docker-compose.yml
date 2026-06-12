@@ -1,0 +1,33 @@
+# Local development convenience for the sentiment-api service.
+#
+# This builds the same production image defined in the Dockerfile and runs it
+# locally with the same port and readiness healthcheck used in the pipeline.
+#
+# Usage:
+#   docker compose up --build        # build and run in the foreground
+#   docker compose up -d --build     # build and run in the background
+#   docker compose ps                # show status, including health
+#   docker compose logs -f           # follow application logs
+#   docker compose down              # stop and remove the container
+#
+# Once running:
+#   http://localhost:8080/docs       # Swagger UI
+#   http://localhost:8080/health     # liveness
+#   http://localhost:8080/ready      # readiness (200 only after model load)
+
+services:
+  sentiment-api:
+    build:
+      context: .
+    image: sentiment-api:local
+    container_name: sentiment-api
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    healthcheck:
+      # Mirrors the Dockerfile HEALTHCHECK: ready only after the model loads.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/ready', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
