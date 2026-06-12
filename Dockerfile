@@ -38,6 +38,10 @@ RUN groupadd --system appgroup \
 
 USER appuser
 
+LABEL org.opencontainers.image.title="sentiment-api" \
+      org.opencontainers.image.description="FastAPI sentiment analysis service serving a scikit-learn model" \
+      org.opencontainers.image.source="https://github.com/dean3772/artac-devops-challenge-v2" 
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
