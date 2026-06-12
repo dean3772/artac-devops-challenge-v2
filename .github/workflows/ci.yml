@@ -18,11 +18,9 @@ jobs:
     name: Run Tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -31,12 +29,10 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
-
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
-
       - name: Run tests
         run: pytest tests/ -v
 
@@ -45,18 +41,14 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     timeout-minutes: 25
-
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-
       - name: Build image and load locally
         uses: docker/build-push-action@v6
         with:
@@ -66,10 +58,8 @@ jobs:
           tags: ${{ env.LOCAL_IMAGE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
       - name: Start container for smoke test
         run: docker run -d --name artac-api-smoke -p 8080:8080 "${LOCAL_IMAGE}"
-
       - name: Wait for readiness
         run: |
           for i in $(seq 1 30); do
@@ -77,15 +67,12 @@ jobs:
               echo "Service is ready"
               exit 0
             fi
-
             echo "Waiting for service readiness..."
             sleep 2
           done
-
           echo "Service did not become ready in time"
           docker logs artac-api-smoke
           exit 1
-
       - name: Validate API endpoints
         run: |
           curl -fsS http://localhost:8080/health
@@ -93,15 +80,12 @@ jobs:
           curl -fsS -X POST http://localhost:8080/predict \
             -H "Content-Type: application/json" \
             -d '{"text":"This movie was fantastic!"}'
-
       - name: Show container logs
         if: always()
         run: docker logs artac-api-smoke || true
-
       - name: Stop smoke-test container
         if: always()
         run: docker rm -f artac-api-smoke || true
-
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@master
         with:
@@ -110,7 +94,6 @@ jobs:
           exit-code: 1
           ignore-unfixed: true
           severity: CRITICAL,HIGH
-
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: docker/login-action@v3
@@ -118,13 +101,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Tag image for registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           docker tag "${LOCAL_IMAGE}" "${IMAGE_REF}"
           docker tag "${LOCAL_IMAGE}" "${IMAGE_LATEST}"
-
       - name: Push Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
@@ -136,9 +117,63 @@ jobs:
     needs: [image]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
-
     steps:
-      - name: Deploy to EC2
+      - name: Deployment dry-run template
         run: |
-          echo "TODO: Implement deployment"
-          echo "This step should SSH into the EC2 instance and deploy the new container"
+          echo "Deployment dry-run template"
+          echo ""
+          echo "Terraform is expected to provision the EC2 instance separately."
+          echo "This application pipeline assumes the EC2 instance already exists."
+          echo "The image below was already tested, smoke-tested, scanned, and pushed by this workflow:"
+          echo "${IMAGE_REF}"
+          echo ""
+          echo "This job intentionally does not execute deployment because no real EC2 host, SSH key, or deployment secrets are configured."
+          echo "See ASSESSMENT.md (Findings 15 and 17) for the SSH-versus-SSM deployment rationale."
+          echo ""
+          echo "The commands below are the intended real deployment flow once secrets and an EC2 target exist."
+          echo ""
+          cat <<EOF
+          Required deployment configuration:
+          - EC2_HOST: public IP or DNS name of the existing EC2 instance
+          - EC2_USER: SSH user for the instance, usually ubuntu for Ubuntu AMIs
+          - EC2_SSH_PRIVATE_KEY: private key stored in GitHub Secrets
+          - APP_PORT: application port, currently 8080
+          Intended deployment commands:
+          # 1. Write the SSH private key from GitHub Secrets to a temporary file.
+          umask 077
+          printf '%s\n' "\$EC2_SSH_PRIVATE_KEY" > ec2_key.pem
+          chmod 600 ec2_key.pem
+          # 2. Connect to the existing EC2 instance and deploy the validated image.
+          # accept-new avoids an interactive host-key prompt on first connection.
+          # For stricter production security, pre-populate known_hosts instead.
+          ssh -o StrictHostKeyChecking=accept-new -i ec2_key.pem "\$EC2_USER@\$EC2_HOST" <<REMOTE
+            set -euxo pipefail
+            docker pull ${IMAGE_REF}
+            docker rm -f sentiment-api || true
+            docker run -d \\
+              --name sentiment-api \\
+              --restart unless-stopped \\
+              -p 8080:8080 \\
+              ${IMAGE_REF}
+            echo "Waiting for application readiness after deployment"
+            # Wait up to about 3 minutes.
+            # This is intentionally longer than the local CI smoke test because a remote EC2 deployment
+            # may need more time for image pull, container startup, and model loading.
+            app_ready=false
+            for i in \$(seq 1 90); do
+              if curl -fsS http://localhost:8080/ready; then
+                echo "Application is ready"
+                app_ready=true
+                break
+              fi
+              echo "Waiting for application readiness..."
+              sleep 2
+            done
+            if [ "\$app_ready" != "true" ]; then
+              echo "Application did not become ready in time"
+              docker logs sentiment-api
+              exit 1
+            fi
+            echo "Deployment completed successfully"
+          REMOTE
+          EOF

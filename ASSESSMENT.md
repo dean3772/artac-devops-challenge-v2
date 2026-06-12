@@ -242,44 +242,40 @@ I made the scan stricter by checking both HIGH and CRITICAL vulnerabilities whil
 Why:
 Security scanning should be useful rather than noisy. A pipeline that fails on every unactionable vulnerability creates alert fatigue, but a pipeline that only gates CRITICAL issues may miss meaningful production risk. A better production approach is to scan for HIGH and CRITICAL vulnerabilities, keep exceptions documented, and review the vulnerability policy regularly.
 
-Finding 15: Deploy job is currently a placeholder and does not perform real deployment
+Finding 15: Deploy job was an inherited placeholder with no real deployment logic
 
 What I found:
-The deploy job currently only echoes TODO messages and does not deploy the image anywhere. This means the pipeline is not fully end-to-end yet from source code to a running service.
+The inherited deploy job only echoed TODO messages and did not deploy the image anywhere, so the pipeline was not end-to-end from source to a running service.
 
 Classification:
 Needs Improvement.
 
 Contractor's reasoning:
-DECISIONS.md mentions that the deploy job is stubbed out and still needs to be wired to the actual infrastructure. I agree that this is acceptable during early setup, especially because the assignment does not require spending money or performing an actual AWS deployment. However, it should not be treated as a production-ready deployment step.
+DECISIONS.md notes the deploy job is stubbed out and still needs wiring to real infrastructure. I agree a stub is acceptable during early setup, especially since the assignment does not require an actual AWS deployment, but a bare TODO does not show the intended deployment design.
 
-Action taken:
-I kept the deploy job as a known placeholder for now and focused this CI/CD pass on the validation flow: run tests, build the Docker image, smoke test the container, scan the image, and push only after validation passes. I will revisit the deploy step after validating the Terraform configuration, because a real deployment flow depends on the final infrastructure design.
+What I did:
+Since I do not have AWS credentials or a real EC2 target, and the assignment does not require a live deploy, I replaced the bare TODO with a documented dry-run deployment template. The job runs and prints the intended real deployment flow without executing it: the required secrets, SSH key handling with a non-interactive host-key policy, an idempotent container replacement, and a post-deploy readiness check against /ready. The SSH key approach could also be replaced with a ready-made GitHub Actions SSH helper. In production I would prefer AWS SSM Session Manager over inbound SSH, as explained in Finding 17.
 
 Why:
-The deploy step should be connected to the actual deployment target, credentials, and infrastructure workflow. Keeping it visible as a placeholder is useful while working through the assignment, but it should be clearly documented as incomplete and not presented as a real production deployment.
+A bare TODO shows nothing about whether the engineer understood deployment. A non-executing documented template demonstrates the full intended flow and the production considerations, while staying honest that no real deployment was performed and no money was spent.
 
 
-Finding 16: Runtime dependency version introduced a HIGH vulnerability in Starlette
+Finding 16: Stricter vulnerability scanning surfaced a HIGH advisory in the Starlette dependency chain
 
 What I found:
-After making the Trivy scan stricter by checking both HIGH and CRITICAL vulnerabilities, the GitHub Actions pipeline failed during the image security scan. Trivy reported a HIGH vulnerability in Starlette 0.46.2:
-
-CVE-2025-62727 - Starlette DoS via Range header merging
-
-Starlette is pulled indirectly through FastAPI, which is pinned in requirements.txt. The scan showed that a fixed version is available, so this was not only a theoretical warning.
+After I tightened the Trivy policy to fail on both HIGH and CRITICAL severities, the pipeline failed during the image security scan. Trivy reported a HIGH severity advisory affecting Starlette, which is pulled in transitively through FastAPI rather than pinned directly in requirements.txt. The advisory had a fixed version available upstream, so this was an actionable finding rather than an unfixable base-image warning.
 
 Classification:
 Bug.
 
 Contractor's reasoning:
-DECISIONS.md does not mention this specific dependency vulnerability. The contractor did mention relaxing Trivy to only fail on CRITICAL vulnerabilities because scans were blocking the pipeline. I understand that choice as a temporary trade-off, but in this case the stricter scan found a real HIGH vulnerability with an available fix.
+DECISIONS.md does not mention this dependency advisory. The contractor only mentioned relaxing Trivy to CRITICAL-only because scans were noisy and blocking the pipeline. Relaxing the policy is what hid this HIGH finding in the first place, so the contractor's trade-off had a real cost.
 
-Action taken:
-I updated the FastAPI dependency in requirements.txt so the dependency resolver installs a fixed Starlette version. After the change, I recreated the local Python environment, installed requirements-dev.txt, and ran the test suite successfully. I also rebuilt and smoke-tested the Docker image locally before pushing the fix.
+What I did:
+I updated the FastAPI pin in requirements.txt so the dependency resolver installs a patched Starlette version that is no longer flagged by the scan. After the change I recreated the local environment, installed requirements-dev.txt, ran the test suite, and rebuilt and smoke-tested the Docker image locally before pushing. As a further hardening step, the transitive dependency could also be pinned explicitly to make the resolved version auditable directly from the requirements file.
 
 Why:
-Application dependencies are part of the production runtime surface. A known HIGH vulnerability in a web framework dependency should not be ignored when a fixed version is available and the upgrade is compatible with the application. This also validates the decision to scan for HIGH and CRITICAL vulnerabilities instead of only CRITICAL.
+Application dependencies are part of the production runtime surface. A HIGH severity advisory in a web framework dependency should not be ignored when a compatible fixed version exists. This also demonstrates the value of scanning for HIGH and CRITICAL rather than CRITICAL only, since the stricter policy is what surfaced it.
 
 Finding 17: SSH access is open to the internet
 
