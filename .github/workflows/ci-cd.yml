@@ -64,7 +64,7 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             if curl -fsS http://localhost:8080/ready; then
-              echo "Service is ready"
+              echo "Service is ready."
               exit 0
             fi
             echo "Waiting for service readiness..."
